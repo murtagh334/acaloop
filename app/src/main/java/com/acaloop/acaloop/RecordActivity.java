@@ -14,6 +14,7 @@ import android.view.MenuItem;
 import android.view.View;
 import android.widget.Button;
 
+import java.io.File;
 import java.io.IOException;
 
 public class RecordActivity extends ActionBarActivity
@@ -23,6 +24,7 @@ public class RecordActivity extends ActionBarActivity
     AudioManager audioManager = null;
     AudioManager.OnAudioFocusChangeListener afChangeListener = null;
     final static int STREAM = AudioManager.STREAM_MUSIC;
+    final static String APP_DIR = "/Acaloop/data";
 
     MediaPlayer mediaPlayer = null;
     MediaPlayer.OnPreparedListener onPreparedListener = null;
@@ -31,6 +33,8 @@ public class RecordActivity extends ActionBarActivity
 
     String playbackFileName = null;
     String recordFileName = null;
+
+    Button recordButton = null;
 
     final static String LOG_TAG = "RECORD_ACTIVITY";
 
@@ -41,8 +45,9 @@ public class RecordActivity extends ActionBarActivity
     {
         super();
         String externalDirPath = Environment.getExternalStorageDirectory().getAbsolutePath();
-        playbackFileName = externalDirPath + "/test_recording2.3gp";
-        recordFileName = externalDirPath + "/test_recording.3gp";
+
+        playbackFileName = externalDirPath + APP_DIR + "/playback.3gp";
+        recordFileName = externalDirPath + APP_DIR + "/temp_recording.3gp";
 
         afChangeListener = new AudioManager.OnAudioFocusChangeListener()
         {
@@ -77,7 +82,7 @@ public class RecordActivity extends ActionBarActivity
             @Override
             public void onCompletion(MediaPlayer mp)
             {
-                //TODO: onCompletion
+                stopRecording();
             }
         };
 
@@ -102,6 +107,9 @@ public class RecordActivity extends ActionBarActivity
         setContentView(R.layout.activity_record);
         //Volume button presses are now directed to the correct audio stream
         setVolumeControlStream(STREAM);
+        audioManager = (AudioManager)getSystemService(Context.AUDIO_SERVICE);
+
+        recordButton = (Button)findViewById(R.id.record_button);
     }
 
     /**
@@ -118,7 +126,9 @@ public class RecordActivity extends ActionBarActivity
             recorder = null;
         }
 
-        //Releases the media player
+        //Releases the media player. stopPlayback here since callback from abandonAudioFocus is not
+        // reliably called.
+        stopPlayback();
         audioManager.abandonAudioFocus(afChangeListener);
     }
 
@@ -165,6 +175,9 @@ public class RecordActivity extends ActionBarActivity
      */
     private void startPlayback()
     {
+        if(mediaPlayer != null && mediaPlayer.isPlaying())
+            return;
+
         mediaPlayer = new MediaPlayer();
         mediaPlayer.setAudioStreamType(STREAM);
         try
@@ -173,8 +186,8 @@ public class RecordActivity extends ActionBarActivity
         }
         catch(IOException e)
         {
-            Log.e(LOG_TAG, "Error finding file for playback");
-            e.printStackTrace();
+            //This is okay, this just means a file hasn't been recorded for us yet.
+            stopPlayback();
             return;
         }
 
@@ -198,15 +211,18 @@ public class RecordActivity extends ActionBarActivity
             return;
 
         if(mediaPlayer.isPlaying())
+        {
             mediaPlayer.stop();
+        }
         mediaPlayer.release();
         mediaPlayer = null;
     }
 
     /**
-     * @param recordButton Button that initiated the event
+     * Set up media player for recording and start.
+     * Also starts playback of previous tracks
      */
-    private void startRecording(Button recordButton)
+    private void startRecording()
     {
         //TODO: make sure no app is using mic already
         //TODO: do we have to make a new one each time? See if we can get by with re-preparing look up lifecycle.
@@ -228,7 +244,6 @@ public class RecordActivity extends ActionBarActivity
 
         //Request "permanent" audio focus
         //Meaning we want to play the music for the foreseeable future.
-        audioManager = (AudioManager)getSystemService(Context.AUDIO_SERVICE);
 
         int result = audioManager.requestAudioFocus(afChangeListener,
                 STREAM,
@@ -244,10 +259,14 @@ public class RecordActivity extends ActionBarActivity
     }
 
     /**
-     * @param recordButton Button that initiated the event
+     * Stop recording and clean up.
+     * Also stops any playback.
      */
-    private void stopRecording(Button recordButton)
+    private void stopRecording()
     {
+        //Stop playback since abandonAudioFocus callback is not reliably called.
+        stopPlayback();
+
         //abandon audio focus since we're done with it. Also stops playback.
         //TODO: after finishing the recording, we should start preparing playback for next record.
         audioManager.abandonAudioFocus(afChangeListener);
@@ -259,6 +278,10 @@ public class RecordActivity extends ActionBarActivity
             recorder = null;
         }
         recordButton.setText(R.string.record);
+
+        //After we're done recording, we can overwrite the old playback file with the new recorded file.
+        //noinspection ResultOfMethodCallIgnored
+        new File(recordFileName).renameTo(new File(playbackFileName));
     }
 
     /**
@@ -266,14 +289,26 @@ public class RecordActivity extends ActionBarActivity
      */
     public void onClickRecord(View v)
     {
-        Button recordButton = (Button)v;
         if(recorder == null)
         {
-            startRecording(recordButton);
+            startRecording();
         }
         else
         {
-            stopRecording(recordButton);
+            stopRecording();
         }
+    }
+
+    /**
+     * Called when reset button is clicked
+     */
+    @SuppressWarnings("ResultOfMethodCallIgnored")
+    public void onClickReset(View v)
+    {
+        stopRecording();
+
+        //Delete the files, start again from scratch.
+        new File(playbackFileName).delete();
+        new File(recordFileName).delete();
     }
 }

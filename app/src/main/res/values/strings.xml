@@ -3,6 +3,7 @@
 
     <string name="app_name">Acaloop</string>
     <string name="record">Record</string>
+    <string name="reset">Reset</string>
     <string name="stop_recording">Stop</string>
     <string name="action_settings">Settings</string>
 

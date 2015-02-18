@@ -1,119 +1,26 @@
 package com.acaloop.acaloop;
 
-import android.content.Context;
 import android.media.AudioManager;
-import android.media.MediaPlayer;
-import android.media.MediaRecorder;
 import android.os.Bundle;
 import android.os.Environment;
-import android.os.PowerManager;
 import android.support.v7.app.ActionBarActivity;
-import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
-import android.widget.Button;
 
-import java.io.File;
-import java.io.IOException;
+import java.util.Observable;
+import java.util.Observer;
 
-public class RecordActivity extends ActionBarActivity
+public class RecordActivity extends ActionBarActivity implements Observer
 {
-
-    MediaRecorder recorder = null;
-    boolean recording = false;
-
-    AudioManager audioManager = null;
-    AudioManager.OnAudioFocusChangeListener afChangeListener = null;
     final static int STREAM = AudioManager.STREAM_MUSIC;
 
     final static String APP_DIR = "/Acaloop/data";
-    final static String PLAYBACK_FILE = "playback";
-    final static String RECORD_FILE = "temp_record";
-    final static String FILE_EXTENSION =".mp4";
+    final static String FILE_EXTENSION = ".mp4";
 
-    MediaPlayer mediaPlayer = null;
-    MediaPlayer.OnPreparedListener onPreparedListener = null;
-    MediaPlayer.OnCompletionListener onCompletionListener = null;
-    MediaPlayer.OnErrorListener onErrorListener = null;
+    ObservableMediaPlayer observableMediaPlayer;
+    ObservableRecorder observableRecorder;
 
-    String playbackFileName = null;
-    String recordFileName = null;
-
-    Button recordButton = null;
-    Button playButton = null;
-
-    final static String LOG_TAG = "RECORD_ACTIVITY";
-
-    /**
-     * Initialize variables that only need to be initialized once
-     */
-    public RecordActivity()
-    {
-        super();
-        String externalDirPath = Environment.getExternalStorageDirectory().getAbsolutePath();
-
-        String appDirPath = externalDirPath + APP_DIR;
-
-        playbackFileName = appDirPath + "/" + PLAYBACK_FILE + FILE_EXTENSION;
-        recordFileName = appDirPath + "/" + RECORD_FILE + FILE_EXTENSION;
-
-        afChangeListener = new AudioManager.OnAudioFocusChangeListener()
-        {
-            @Override
-            public void onAudioFocusChange(int focusChange)
-            {
-                if(focusChange == AudioManager.AUDIOFOCUS_LOSS)
-                {
-                    stopPlayback();
-                }
-                else if(focusChange == AudioManager.AUDIOFOCUS_GAIN)
-                {
-                    startPlayback();
-                }
-            }
-        };
-
-        onPreparedListener = new MediaPlayer.OnPreparedListener()
-        {
-            @Override
-            public void onPrepared(MediaPlayer mediaPlayer)
-            {
-                //Just begin playing for now. Later should indicate that we're prepared with boolean.
-                if(!mediaPlayer.isPlaying())
-                {
-                    mediaPlayer.start();
-                }
-
-                //Since we're playing now, set text
-                playButton.setText(R.string.stop_playing);
-            }
-        };
-
-        //When playback completes, stop recording.
-        onCompletionListener = new MediaPlayer.OnCompletionListener()
-        {
-            @Override
-            public void onCompletion(MediaPlayer mediaPlayer)
-            {
-                stopRecording();
-            }
-        };
-
-        //Since we're preparing asynchronously, need to listen for potential errors
-        onErrorListener = new MediaPlayer.OnErrorListener()
-        {
-            @Override
-            public boolean onError(MediaPlayer mediaPlayer, int what, int extra)
-            {
-                Log.e(LOG_TAG, what + " " + extra);
-                //MediaPlayer has been moved to the error state and must be reset.
-                //Stop recording if we're recording as well.
-                stopRecording();
-                return false;
-            }
-        };
-    }
     @Override
     protected void onCreate(Bundle savedInstanceState)
     {
@@ -121,9 +28,24 @@ public class RecordActivity extends ActionBarActivity
         setContentView(R.layout.activity_record);
         //Volume button presses are now directed to the correct audio stream
         setVolumeControlStream(STREAM);
-        audioManager = (AudioManager)getSystemService(Context.AUDIO_SERVICE);
-        recordButton = (Button)findViewById(R.id.record_button);
-        playButton = (Button)findViewById(R.id.play_button);
+
+        observableMediaPlayer = new ObservableMediaPlayer(this);
+        observableRecorder = new ObservableRecorder();
+
+        PlayButton playButton = (PlayButton)findViewById(R.id.play_button);
+        RecordButton recordButton = (RecordButton)findViewById(R.id.record_button);
+
+        playButton.attachMediaPlayer(observableMediaPlayer);
+        recordButton.attachRecorder(observableRecorder);
+
+        observableMediaPlayer.addObserver(playButton);
+        observableMediaPlayer.addObserver(observableRecorder);
+
+        observableRecorder.addObserver(recordButton);
+        observableRecorder.addObserver(observableMediaPlayer);
+
+        //So we know when it stops recording to overwrite the old playback file
+        observableRecorder.addObserver(this);
     }
 
     /**
@@ -133,16 +55,7 @@ public class RecordActivity extends ActionBarActivity
     protected void onStop()
     {
         super.onStop();
-        //stopRecording does all the cleaning up for us.
-        //TODO: separate cleanup from stopRecording.
-        stopRecording();
-    }
-
-    @Override
-    protected void onPause()
-    {
-        //TODO: handle user navigating away from app.
-        super.onPause();
+        cleanup();
     }
 
     @Override
@@ -176,164 +89,17 @@ public class RecordActivity extends ActionBarActivity
         return super.onOptionsItemSelected(item);
     }
 
-    /**
-     * Starts playing tracks accumulated so far.
-     */
-    private void startPlayback()
+    private void cleanup()
     {
-        if((mediaPlayer != null && mediaPlayer.isPlaying()) ||
-                !new File(playbackFileName).exists())
-            return;
-
-        mediaPlayer = new MediaPlayer();
-        mediaPlayer.setAudioStreamType(STREAM);
-        mediaPlayer.setOnPreparedListener(onPreparedListener);
-        mediaPlayer.setOnCompletionListener(onCompletionListener);
-        mediaPlayer.setOnErrorListener(onErrorListener);
-
-        try
-        {
-            mediaPlayer.setDataSource(playbackFileName);
-        }
-        catch(IOException e)
-        {
-            //This is okay, this just means a file hasn't been recorded for us yet.
-            e.printStackTrace();
-            Log.e(LOG_TAG, "Couldn't set media player data source to playback file");
-            stopPlayback();
-            return;
-        }
-
-        //Don't allow screen to sleep while we're playing back / recording.
-        mediaPlayer.setWakeMode(getApplicationContext(), PowerManager.PARTIAL_WAKE_LOCK);
-
-        //Starts another thread to prepare for playback. Calls back through MediaPlayer.OnPreparedListener
-        mediaPlayer.prepareAsync();
+        observableMediaPlayer.cleanupPlayer();
+        observableRecorder.cleanupRecorder();
     }
 
-    /**
-     * Stops playing the audio stream.
-     */
-    private void stopPlayback()
+    private void preparePlaybackForNextRecord()
     {
-        if(mediaPlayer == null)
-            return;
-
-        if(mediaPlayer.isPlaying())
-        {
-            mediaPlayer.stop();
-        }
-        mediaPlayer.reset();
-        mediaPlayer.release();
-        mediaPlayer = null;
-        playButton.setText(R.string.play);
-    }
-
-    /**
-     * Set up media player for recording and start.
-     * Also starts playback of previous tracks
-     */
-    private void startRecording()
-    {
-        //TODO: make sure no app is using mic already
-        //TODO: do we have to make a new one each time? See if we can get by with re-preparing look up lifecycle.
-        //Same goes for mediaPlayer
-        recorder = new MediaRecorder();
-        recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
-        recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
-        recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
-//        recorder.setAudioEncodingBitRate(16);
-//        recorder.setAudioSamplingRate(44100);
-
-        //Make sure our appDir exists before trying to record to it.
-        String appDirPath = Environment.getExternalStorageDirectory().getAbsolutePath() + APP_DIR;
-        File appDir = new File(appDirPath);
-        if(!appDir.exists() &&!appDir.mkdirs())
-        {
-            Log.e(LOG_TAG,"Could not make app dir " + appDirPath);
-        }
-
-        //Must be called AFTER setOutputFormat.
-        recorder.setOutputFile(recordFileName);
-
-        //TODO: Need to be using AudioRecord rather than MediaRecorder to do this.
-//        if(NoiseSuppressor.isAvailable())
-//        {
-//            NoiseSuppressor ns = NoiseSuppressor.create(recorder.getAudioSessionID());
-//            //Check ns.getEnabled();
-//        }
-        try
-        {
-            recorder.prepare();
-        }
-        catch (IOException e)
-        {
-            e.printStackTrace();
-            Log.e(LOG_TAG, "Prepare Failed");
-        }
-
-        //Request "permanent" audio focus
-        //Meaning we want to play the music for the foreseeable future.
-
-        int result = audioManager.requestAudioFocus(afChangeListener,
-                STREAM,
-                AudioManager.AUDIOFOCUS_GAIN);
-
-        if(result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
-        {
-            startPlayback();
-        }
-        //Start recording
-        recorder.start();
-        //Need to keep track of this ourselves.
-        recording = true;
-        recordButton.setText(R.string.stop_recording);
-    }
-
-    /**
-     * Stop recording and clean up.
-     * Also stops any playback.
-     */
-    private void stopRecording()
-    {
-        //Stop playback since abandonAudioFocus callback is not reliably called.
-        stopPlayback();
-
-        //abandon audio focus since we're done with it. Also stops playback.
-        //TODO: after finishing the recording, we should start preparing playback for next record.
-        audioManager.abandonAudioFocus(afChangeListener);
-        if(recorder != null)
-        {
-            //Is stop release redundant?
-            if(recording)
-            {
-                recorder.stop();
-                recording = false;
-            }
-            recorder.reset();
-            recorder.release();
-            recorder = null;
-        }
-        recordButton.setText(R.string.record);
-
         //After we're done recording, we can overwrite the old playback file with the new recorded file.
         //noinspection ResultOfMethodCallIgnored
-        new File(recordFileName).renameTo(new File(playbackFileName));
-    }
-
-    /**
-     * Called when record button is clicked
-     */
-    public void onClickRecord(View v)
-    {
-        if(!recording)
-        {
-            startRecording();
-        }
-        else
-        {
-            stopRecording();
-        }
+        observableRecorder.getRecordedFile().renameTo(observableMediaPlayer.getPlaybackFile());
     }
 
     /**
@@ -342,25 +108,38 @@ public class RecordActivity extends ActionBarActivity
     @SuppressWarnings("ResultOfMethodCallIgnored")
     public void onClickReset(View v)
     {
-        stopRecording();
+        cleanup();
 
-        //Delete the files, start again from scratch.
-        new File(playbackFileName).delete();
-        new File(recordFileName).delete();
+        //The function of the reset button is to delete the audio we've accumulated.
+        observableMediaPlayer.getPlaybackFile().delete();
+        observableRecorder.getRecordedFile().delete();
+    }
+
+    public static String getAppDirPath()
+    {
+        return Environment.getExternalStorageDirectory().getAbsolutePath() + APP_DIR;
+    }
+    /**
+     * @param filename The name of the music file e.g. "audio"
+     * @return The name of the path to the music file e.g. "/storage/0/.../Acaloop/audio.mp4
+     */
+    public static String getPathForAudioFile(String filename)
+    {
+        return getAppDirPath() + "/" + filename + FILE_EXTENSION;
     }
 
     /**
-     * Called when play button is clicked
+     * @param observable The ObservableRecorder we're watching. Must prepare playback for next
+     *                   time on completion.
+     * @param data Not used.
      */
-    public void onClickPlay(View v)
+    @Override
+    public void update(Observable observable, Object data)
     {
-        if(mediaPlayer != null)
+        ObservableRecorder observableRecorder = (ObservableRecorder)observable;
+        if(!observableRecorder.isRecording())
         {
-            stopPlayback();
-        }
-        else
-        {
-            startPlayback();
+            preparePlaybackForNextRecord();
         }
     }
 }

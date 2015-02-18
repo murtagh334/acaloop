@@ -9,6 +9,15 @@
                 tools:context=".RecordActivity">
 
     <Button
+        android:id="@+id/play_button"
+        android:text="@string/play"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignParentBottom="true"
+        android:layout_alignParentLeft="true"
+        android:onClick="onClickPlay"/>
+
+    <Button
         android:id="@+id/record_button"
         android:text="@string/record"
         android:layout_width="wrap_content"
@@ -16,6 +25,7 @@
         android:layout_alignParentBottom="true"
         android:layout_centerHorizontal="true"
         android:onClick="onClickRecord"/>
+
     <Button
         android:id="@+id/reset_button"
         android:text="@string/reset"

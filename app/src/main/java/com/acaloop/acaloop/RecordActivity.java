@@ -21,10 +21,16 @@ public class RecordActivity extends ActionBarActivity
 {
 
     MediaRecorder recorder = null;
+    boolean recording = false;
+
     AudioManager audioManager = null;
     AudioManager.OnAudioFocusChangeListener afChangeListener = null;
     final static int STREAM = AudioManager.STREAM_MUSIC;
+
     final static String APP_DIR = "/Acaloop/data";
+    final static String PLAYBACK_FILE = "playback";
+    final static String RECORD_FILE = "temp_record";
+    final static String FILE_EXTENSION =".mp4";
 
     MediaPlayer mediaPlayer = null;
     MediaPlayer.OnPreparedListener onPreparedListener = null;
@@ -35,6 +41,7 @@ public class RecordActivity extends ActionBarActivity
     String recordFileName = null;
 
     Button recordButton = null;
+    Button playButton = null;
 
     final static String LOG_TAG = "RECORD_ACTIVITY";
 
@@ -46,8 +53,10 @@ public class RecordActivity extends ActionBarActivity
         super();
         String externalDirPath = Environment.getExternalStorageDirectory().getAbsolutePath();
 
-        playbackFileName = externalDirPath + APP_DIR + "/playback.3gp";
-        recordFileName = externalDirPath + APP_DIR + "/temp_recording.3gp";
+        String appDirPath = externalDirPath + APP_DIR;
+
+        playbackFileName = appDirPath + "/" + PLAYBACK_FILE + FILE_EXTENSION;
+        recordFileName = appDirPath + "/" + RECORD_FILE + FILE_EXTENSION;
 
         afChangeListener = new AudioManager.OnAudioFocusChangeListener()
         {
@@ -68,11 +77,16 @@ public class RecordActivity extends ActionBarActivity
         onPreparedListener = new MediaPlayer.OnPreparedListener()
         {
             @Override
-            public void onPrepared(MediaPlayer mp)
+            public void onPrepared(MediaPlayer mediaPlayer)
             {
                 //Just begin playing for now. Later should indicate that we're prepared with boolean.
-                if(!mp.isPlaying())
-                    mp.start();
+                if(!mediaPlayer.isPlaying())
+                {
+                    mediaPlayer.start();
+                }
+
+                //Since we're playing now, set text
+                playButton.setText(R.string.stop_playing);
             }
         };
 
@@ -80,7 +94,7 @@ public class RecordActivity extends ActionBarActivity
         onCompletionListener = new MediaPlayer.OnCompletionListener()
         {
             @Override
-            public void onCompletion(MediaPlayer mp)
+            public void onCompletion(MediaPlayer mediaPlayer)
             {
                 stopRecording();
             }
@@ -90,12 +104,12 @@ public class RecordActivity extends ActionBarActivity
         onErrorListener = new MediaPlayer.OnErrorListener()
         {
             @Override
-            public boolean onError(MediaPlayer mp, int what, int extra)
+            public boolean onError(MediaPlayer mediaPlayer, int what, int extra)
             {
-                //MediaPlayer has been moved to the error state and must be reset
-                //TODO: onError should stop recording, reset state to normal.
-                mediaPlayer.release();
-                mediaPlayer = null;
+                Log.e(LOG_TAG, what + " " + extra);
+                //MediaPlayer has been moved to the error state and must be reset.
+                //Stop recording if we're recording as well.
+                stopRecording();
                 return false;
             }
         };
@@ -108,8 +122,8 @@ public class RecordActivity extends ActionBarActivity
         //Volume button presses are now directed to the correct audio stream
         setVolumeControlStream(STREAM);
         audioManager = (AudioManager)getSystemService(Context.AUDIO_SERVICE);
-
         recordButton = (Button)findViewById(R.id.record_button);
+        playButton = (Button)findViewById(R.id.play_button);
     }
 
     /**
@@ -119,17 +133,9 @@ public class RecordActivity extends ActionBarActivity
     protected void onStop()
     {
         super.onStop();
-
-        if(recorder != null)
-        {
-            recorder.release();
-            recorder = null;
-        }
-
-        //Releases the media player. stopPlayback here since callback from abandonAudioFocus is not
-        // reliably called.
-        stopPlayback();
-        audioManager.abandonAudioFocus(afChangeListener);
+        //stopRecording does all the cleaning up for us.
+        //TODO: separate cleanup from stopRecording.
+        stopRecording();
     }
 
     @Override
@@ -175,11 +181,16 @@ public class RecordActivity extends ActionBarActivity
      */
     private void startPlayback()
     {
-        if(mediaPlayer != null && mediaPlayer.isPlaying())
+        if((mediaPlayer != null && mediaPlayer.isPlaying()) ||
+                !new File(playbackFileName).exists())
             return;
 
         mediaPlayer = new MediaPlayer();
         mediaPlayer.setAudioStreamType(STREAM);
+        mediaPlayer.setOnPreparedListener(onPreparedListener);
+        mediaPlayer.setOnCompletionListener(onCompletionListener);
+        mediaPlayer.setOnErrorListener(onErrorListener);
+
         try
         {
             mediaPlayer.setDataSource(playbackFileName);
@@ -187,13 +198,11 @@ public class RecordActivity extends ActionBarActivity
         catch(IOException e)
         {
             //This is okay, this just means a file hasn't been recorded for us yet.
+            e.printStackTrace();
+            Log.e(LOG_TAG, "Couldn't set media player data source to playback file");
             stopPlayback();
             return;
         }
-
-        mediaPlayer.setOnPreparedListener(onPreparedListener);
-        mediaPlayer.setOnCompletionListener(onCompletionListener);
-        mediaPlayer.setOnErrorListener(onErrorListener);
 
         //Don't allow screen to sleep while we're playing back / recording.
         mediaPlayer.setWakeMode(getApplicationContext(), PowerManager.PARTIAL_WAKE_LOCK);
@@ -214,8 +223,10 @@ public class RecordActivity extends ActionBarActivity
         {
             mediaPlayer.stop();
         }
+        mediaPlayer.reset();
         mediaPlayer.release();
         mediaPlayer = null;
+        playButton.setText(R.string.play);
     }
 
     /**
@@ -229,9 +240,28 @@ public class RecordActivity extends ActionBarActivity
         //Same goes for mediaPlayer
         recorder = new MediaRecorder();
         recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
-        recorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP);
-        recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB);
+        recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
+        recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
+//        recorder.setAudioEncodingBitRate(16);
+//        recorder.setAudioSamplingRate(44100);
+
+        //Make sure our appDir exists before trying to record to it.
+        String appDirPath = Environment.getExternalStorageDirectory().getAbsolutePath() + APP_DIR;
+        File appDir = new File(appDirPath);
+        if(!appDir.exists() &&!appDir.mkdirs())
+        {
+            Log.e(LOG_TAG,"Could not make app dir " + appDirPath);
+        }
+
+        //Must be called AFTER setOutputFormat.
         recorder.setOutputFile(recordFileName);
+
+        //TODO: Need to be using AudioRecord rather than MediaRecorder to do this.
+//        if(NoiseSuppressor.isAvailable())
+//        {
+//            NoiseSuppressor ns = NoiseSuppressor.create(recorder.getAudioSessionID());
+//            //Check ns.getEnabled();
+//        }
         try
         {
             recorder.prepare();
@@ -255,6 +285,8 @@ public class RecordActivity extends ActionBarActivity
         }
         //Start recording
         recorder.start();
+        //Need to keep track of this ourselves.
+        recording = true;
         recordButton.setText(R.string.stop_recording);
     }
 
@@ -273,7 +305,12 @@ public class RecordActivity extends ActionBarActivity
         if(recorder != null)
         {
             //Is stop release redundant?
-            recorder.stop();
+            if(recording)
+            {
+                recorder.stop();
+                recording = false;
+            }
+            recorder.reset();
             recorder.release();
             recorder = null;
         }
@@ -289,7 +326,7 @@ public class RecordActivity extends ActionBarActivity
      */
     public void onClickRecord(View v)
     {
-        if(recorder == null)
+        if(!recording)
         {
             startRecording();
         }
@@ -310,5 +347,20 @@ public class RecordActivity extends ActionBarActivity
         //Delete the files, start again from scratch.
         new File(playbackFileName).delete();
         new File(recordFileName).delete();
+    }
+
+    /**
+     * Called when play button is clicked
+     */
+    public void onClickPlay(View v)
+    {
+        if(mediaPlayer != null)
+        {
+            stopPlayback();
+        }
+        else
+        {
+            startPlayback();
+        }
     }
 }

@@ -44,7 +44,16 @@ public class RecordButton extends Button implements Observer
     @Override
     public void update(Observable observable, Object data)
     {
-        ObservableRecorder observableRecorder = (ObservableRecorder)observable;
-        setText(observableRecorder.isRecording() ? R.string.stop_recording : R.string.record);
+        final ObservableRecorder observableRecorder = (ObservableRecorder)observable;
+
+        //Need to set text on the UI thread.
+        post(new Runnable()
+        {
+            @Override
+            public void run()
+            {
+                setText(observableRecorder.isRecording() ? R.string.stop_recording : R.string.record);
+            }
+        });
     }
 }

@@ -48,7 +48,15 @@ public class PlayButton extends Button implements Observer
     @Override
     public void update(Observable observable, Object data)
     {
-        //Set the text according to state of the observable
-        setText(((ObservableMediaPlayer) observable).isPlaying() ? R.string.stop_playing : R.string.play);
+        final ObservableMediaPlayer observableMediaPlayer = (ObservableMediaPlayer) observable;
+        post(new Runnable()
+        {
+            @Override
+            public void run()
+            {
+                //Set the text according to state of the observable
+                setText(observableMediaPlayer.isPlaying() ? R.string.stop_playing : R.string.play);
+            }
+        });
     }
 }

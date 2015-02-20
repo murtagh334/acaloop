@@ -1,5 +1,6 @@
 package com.acaloop.acaloop;
 
+import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.os.Bundle;
 import android.os.Environment;
@@ -8,15 +9,18 @@ import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 
-import java.util.Observable;
-import java.util.Observer;
+import java.util.InvalidPropertiesFormatException;
 
-public class RecordActivity extends ActionBarActivity implements Observer
+public class RecordActivity extends ActionBarActivity
 {
     final static int STREAM = AudioManager.STREAM_MUSIC;
 
     final static String APP_DIR = "/Acaloop/data";
     final static String FILE_EXTENSION = ".mp4";
+
+    final static int SAMPLE_RATE_HZ = 44100;
+    final static int CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_STEREO;
+    final static int AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT;
 
     ObservableMediaPlayer observableMediaPlayer;
     ObservableRecorder observableRecorder;
@@ -29,8 +33,15 @@ public class RecordActivity extends ActionBarActivity implements Observer
         //Volume button presses are now directed to the correct audio stream
         setVolumeControlStream(STREAM);
 
-        observableMediaPlayer = new ObservableMediaPlayer(this);
-        observableRecorder = new ObservableRecorder();
+        try
+        {
+            observableMediaPlayer = new ObservableMediaPlayer(this);
+            observableRecorder = new ObservableRecorder();
+        }
+        catch (InvalidPropertiesFormatException e)
+        {
+            e.printStackTrace();
+        }
 
         PlayButton playButton = (PlayButton)findViewById(R.id.play_button);
         RecordButton recordButton = (RecordButton)findViewById(R.id.record_button);
@@ -43,9 +54,6 @@ public class RecordActivity extends ActionBarActivity implements Observer
 
         observableRecorder.addObserver(recordButton);
         observableRecorder.addObserver(observableMediaPlayer);
-
-        //So we know when it stops recording to overwrite the old playback file
-        observableRecorder.addObserver(this);
     }
 
     /**
@@ -95,51 +103,19 @@ public class RecordActivity extends ActionBarActivity implements Observer
         observableRecorder.cleanupRecorder();
     }
 
-    private void preparePlaybackForNextRecord()
-    {
-        //After we're done recording, we can overwrite the old playback file with the new recorded file.
-        //noinspection ResultOfMethodCallIgnored
-        observableRecorder.getRecordedFile().renameTo(observableMediaPlayer.getPlaybackFile());
-    }
-
     /**
      * Called when reset button is clicked
      */
     @SuppressWarnings("ResultOfMethodCallIgnored")
     public void onClickReset(View v)
     {
-        cleanup();
-
+//        cleanup();
         //The function of the reset button is to delete the audio we've accumulated.
-        observableMediaPlayer.getPlaybackFile().delete();
-        observableRecorder.getRecordedFile().delete();
+        observableMediaPlayer.deletePlaybackData();
     }
 
     public static String getAppDirPath()
     {
         return Environment.getExternalStorageDirectory().getAbsolutePath() + APP_DIR;
-    }
-    /**
-     * @param filename The name of the music file e.g. "audio"
-     * @return The name of the path to the music file e.g. "/storage/0/.../Acaloop/audio.mp4
-     */
-    public static String getPathForAudioFile(String filename)
-    {
-        return getAppDirPath() + "/" + filename + FILE_EXTENSION;
-    }
-
-    /**
-     * @param observable The ObservableRecorder we're watching. Must prepare playback for next
-     *                   time on completion.
-     * @param data Not used.
-     */
-    @Override
-    public void update(Observable observable, Object data)
-    {
-        ObservableRecorder observableRecorder = (ObservableRecorder)observable;
-        if(!observableRecorder.isRecording())
-        {
-            preparePlaybackForNextRecord();
-        }
     }
 }

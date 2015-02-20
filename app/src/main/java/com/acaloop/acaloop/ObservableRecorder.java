@@ -1,10 +1,12 @@
 package com.acaloop.acaloop;
 
+import android.media.AudioRecord;
 import android.media.MediaRecorder;
 import android.util.Log;
 
-import java.io.File;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.InvalidPropertiesFormatException;
 import java.util.Observable;
 import java.util.Observer;
 
@@ -13,54 +15,44 @@ import java.util.Observer;
  */
 public class ObservableRecorder extends Observable implements Observer
 {
-    final static String LOG_TAG = ObservableRecorder.class.getName();
-    final static String RECORD_FILE_NAME = "temp_record";
+    AudioRecord recorder;
+    int bufferSize;
 
-    MediaRecorder recorder;
-    //MediaRecorder doesn't have a notion for this
-    boolean recording = false;
-    File recordFile;
+    private static String LOG_TAG = ObservableRecorder.class.getCanonicalName();
 
-    public ObservableRecorder()
+    public ObservableRecorder() throws InvalidPropertiesFormatException
     {
         super();
-        recordFile = new File(RecordActivity.getPathForAudioFile(RECORD_FILE_NAME));
+        initRecorder();
     }
 
     /**
-     * @return True iff the MediaRecorder is recording
+     * @return True iff the recorder is recording
      */
     public boolean isRecording()
     {
-        return recording;
+        return recorder!=null && recorder.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING;
     }
 
     /**
-     * @return False if we were unable to init the recorder
+     * Initialize our recorder.
      */
-    private boolean initRecorder()
+    private void initRecorder() throws InvalidPropertiesFormatException
     {
         //TODO: make sure no app is using mic already?
-        recorder = new MediaRecorder();
-        recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
-        recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
-        recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
-        recorder.setAudioEncodingBitRate(16);
-        recorder.setAudioSamplingRate(44100);
+        //TODO: choose better sample rate, channel config, audio format if available.
+        int sampleRateInHz = RecordActivity.SAMPLE_RATE_HZ;
+        int channelConfig = RecordActivity.CHANNEL_CONFIG;
+        int audioFormat = RecordActivity.AUDIO_FORMAT;
+        int minBufferSize = AudioRecord.getMinBufferSize(sampleRateInHz, channelConfig, audioFormat);
+        bufferSize = minBufferSize;
 
-        //Make sure our appDir exists before trying to record to it.
-        String appDirPath = RecordActivity.getAppDirPath();
-        File appDir = new File(appDirPath);
-        if(!appDir.exists() &&!appDir.mkdirs())
+        recorder = new AudioRecord(MediaRecorder.AudioSource.MIC,
+                sampleRateInHz,channelConfig,audioFormat,minBufferSize);
+        if(recorder.getState() != AudioRecord.STATE_INITIALIZED)
         {
-            Log.e(LOG_TAG, "Could not make app dir " + appDirPath);
-            cleanupRecorder();
-            return false;
+            throw new InvalidPropertiesFormatException("Couldn't initialize AudioRecord. Recorder in state: " + recorder.getState());
         }
-
-        //Must be called AFTER setOutputFormat.
-        recorder.setOutputFile(recordFile.getPath());
-        return true;
     }
 
     /**
@@ -68,24 +60,51 @@ public class ObservableRecorder extends Observable implements Observer
      */
     public void startRecording()
     {
-        if(!initRecorder())
-            return;
-
-        try
-        {
-            recorder.prepare();
-        }
-        catch (IOException e)
-        {
-            Log.e(LOG_TAG, "Prepare Failed. This should not happen");
-            cleanupRecorder();
-            return;
-        }
-
-        recorder.start();
-        recording = true;
+        recorder.startRecording();
         setChanged();
         notifyObservers();
+
+        //Start recording on a new thread. Don't block this one.
+        new Thread(new Runnable()
+        {
+            @Override
+            public void run()
+            {
+                writeAudioDataToStream();
+            }
+        }).start();
+    }
+
+    private void writeAudioDataToStream()
+    {
+        ByteArrayOutputStream os = new ByteArrayOutputStream();
+        while(isRecording())
+        {
+            byte []audioData = new byte[bufferSize];
+            recorder.read(audioData,0,bufferSize);
+            try
+            {
+                os.write(audioData);
+            } catch (IOException e)
+            {
+                e.printStackTrace();
+                Log.e(LOG_TAG, "Couldn't write to byte output stream");
+            }
+        }
+        //Not using recorder for foreseeable future, free resources.
+        //cleanupRecorder();
+
+        Log.d(LOG_TAG, "Sending os byte array");
+        //We have officially stopped recording now. send the audio data to whoever needs it.
+        setChanged();
+        notifyObservers(os.toByteArray());
+        try
+        {
+            os.close();
+        } catch (IOException e)
+        {
+            e.printStackTrace();
+        }
     }
 
     /**
@@ -93,7 +112,10 @@ public class ObservableRecorder extends Observable implements Observer
      */
     public void stopRecording()
     {
-        cleanupRecorder();
+        if(isRecording())
+        {
+            recorder.stop();
+        }
     }
 
     /**
@@ -106,15 +128,8 @@ public class ObservableRecorder extends Observable implements Observer
         if(recorder == null)
             return;
 
-        if(recording)
-        {
-            recorder.stop();
-            recording = false;
-            setChanged();
-            notifyObservers();
-        }
+        stopRecording();
 
-        recorder.reset();
         recorder.release();
         recorder = null;
     }
@@ -133,16 +148,5 @@ public class ObservableRecorder extends Observable implements Observer
         {
             stopRecording();
         }
-    }
-
-    /**
-     * @return The recorded file. Null if we're currently recording.
-     */
-    public File getRecordedFile()
-    {
-        if(!isRecording())
-            return recordFile;
-
-        return null;
     }
 }

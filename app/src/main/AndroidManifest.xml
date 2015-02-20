@@ -2,13 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.acaloop.acaloop" >
 
-    <!--For recording audio to storage-->
+    <!--For recording audio-->
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
     <!--Required to make sure while playing music, the phone doesn't dim/ processor doesn't sleep-->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <!--For playing back audio-->
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
 
     <application
         android:allowBackup="true"

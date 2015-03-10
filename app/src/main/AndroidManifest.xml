@@ -6,6 +6,8 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <!--Required to make sure while playing music, the phone doesn't dim/ processor doesn't sleep-->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!--Required to play music through speakers while headphones are in-->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
 
     <application
         android:allowBackup="true"

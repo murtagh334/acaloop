@@ -29,14 +29,22 @@ public class PlayButton extends Button implements Observer
             @Override
             public void onClick(View v)
             {
-                if(observableMediaPlayer.isPlaying())
+                //Don't block the UI thread.
+                new Thread(new Runnable()
                 {
-                    observableMediaPlayer.stopPlayback();
-                }
-                else
-                {
-                    observableMediaPlayer.startPlayback();
-                }
+                    @Override
+                    public void run()
+                    {
+                        if(observableMediaPlayer.isPlaying())
+                        {
+                            observableMediaPlayer.stopPlayback();
+                        }
+                        else
+                        {
+                            observableMediaPlayer.startPlayback();
+                        }
+                    }
+                }).start();
             }
         });
     }

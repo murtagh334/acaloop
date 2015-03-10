@@ -3,28 +3,38 @@ package com.acaloop.acaloop;
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.os.Bundle;
-import android.os.Environment;
 import android.support.v7.app.ActionBarActivity;
+import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 
 import java.util.InvalidPropertiesFormatException;
+import java.util.Observable;
+import java.util.Observer;
 
-public class RecordActivity extends ActionBarActivity
+/**
+ * The main activity
+ */
+public class RecordActivity extends ActionBarActivity implements Observer
 {
     final static int STREAM = AudioManager.STREAM_MUSIC;
 
-    final static String APP_DIR = "/Acaloop/data";
-    final static String FILE_EXTENSION = ".mp4";
+//    final static String APP_DIR = "/Acaloop/data";
+//    final static String FILE_EXTENSION = ".mp4";
 
     final static int SAMPLE_RATE_HZ = 44100;
-    final static int CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_STEREO;
     final static int AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT;
 
     ObservableMediaPlayer observableMediaPlayer;
     ObservableRecorder observableRecorder;
 
+    final static String LOG_TAG = RecordActivity.class.getSimpleName();
+
+    /**
+     * Upon creation of the app (See activity lifecycle for details)
+     * @param savedInstanceState Some saved data to be carried over if any.
+     */
     @Override
     protected void onCreate(Bundle savedInstanceState)
     {
@@ -50,10 +60,10 @@ public class RecordActivity extends ActionBarActivity
         recordButton.attachRecorder(observableRecorder);
 
         observableMediaPlayer.addObserver(playButton);
-        observableMediaPlayer.addObserver(observableRecorder);
 
-        observableRecorder.addObserver(recordButton);
         observableRecorder.addObserver(observableMediaPlayer);
+        observableRecorder.addObserver(recordButton);
+
     }
 
     /**
@@ -63,7 +73,7 @@ public class RecordActivity extends ActionBarActivity
     protected void onStop()
     {
         super.onStop();
-        cleanup();
+        //cleanup();
     }
 
     @Override
@@ -97,25 +107,114 @@ public class RecordActivity extends ActionBarActivity
         return super.onOptionsItemSelected(item);
     }
 
-    private void cleanup()
-    {
-        observableMediaPlayer.cleanupPlayer();
-        observableRecorder.cleanupRecorder();
-    }
+//    private void cleanup()
+//    {
+//        observableMediaPlayer.cleanupPlayer();
+//        observableRecorder.cleanupRecorder();
+//    }
 
     /**
      * Called when reset button is clicked
+     * @param v The reset button
      */
     @SuppressWarnings("ResultOfMethodCallIgnored")
     public void onClickReset(View v)
     {
 //        cleanup();
+        observableMediaPlayer.stopPlayback();
+        observableRecorder.stopRecording();
         //The function of the reset button is to delete the audio we've accumulated.
         observableMediaPlayer.deletePlaybackData();
     }
 
-    public static String getAppDirPath()
+    /**
+     * Called when latency test button is clicked.
+     * @param v The latency test button
+     */
+    public void onClickLatencyTest(View v)
     {
-        return Environment.getExternalStorageDirectory().getAbsolutePath() + APP_DIR;
+        observableMediaPlayer.setupLatencyTest();
+        observableRecorder.addObserver(this);
+        //Starts recording, plays the sine wave.
+        observableRecorder.startRecording(true, observableMediaPlayer);
+    }
+
+    /**
+     *
+     * @param data The data we're given
+     * @return The latency
+     */
+    public int findLatency(short[] data, int sampleRate, int frequency, int frequencyDuration, int channelCount)
+    {
+        int mostLikelyOffset = 0;
+        double powerOfOffset = -999; //arbitrary low value
+
+        double msInSamples = (1.0*channelCount/1000.0)*(double)sampleRate;
+
+        //Assume we're fine with 20 ms delay and won't ever go above 220 ms delay.
+        for(int checkOffset = 20*(int)msInSamples; checkOffset < Math.min(220*(int)msInSamples,data.length); checkOffset+=channelCount)
+        {
+            double power = calculateGoertzel(data, checkOffset, checkOffset + frequencyDuration*channelCount,
+                    frequency, sampleRate, channelCount);
+
+            if(power > powerOfOffset)
+            {
+                powerOfOffset = power;
+                mostLikelyOffset = checkOffset;
+            }
+        }
+        return mostLikelyOffset;
+    }
+
+    public double calculateGoertzel(short[] sample, int from, int to, double frequency, int sampleRate, int channelCount)
+    {
+        double skn, skn1, skn2;
+        skn = skn1 = 0;
+
+        for (int i = from; i < to; i+=channelCount)
+        {
+            skn2 = skn1;
+            skn1 = skn;
+            skn = 2 * Math.cos(2 * Math.PI * frequency / sampleRate) * skn1 - skn2 + sample[i];
+        }
+
+        double wnk = Math.exp(-2 * Math.PI * frequency / sampleRate);
+
+        return 20* Math.log10(Math.abs((skn - wnk * skn1)));
+    }
+
+//    public static String getAppDirPath()
+//    {
+//        return Environment.getExternalStorageDirectory().getAbsolutePath() + APP_DIR;
+//    }
+
+    /**
+     * Used for the latency test. Once the recorder finishes recording, This will be called.
+     * @param observable The observed object (i.e. the recorder)
+     * @param data Some data passed in (i.e. the latency recording)
+     */
+    @Override
+    public void update(Observable observable, Object data)
+    {
+        //LATENCY TEST RESULTS
+        if(observable instanceof ObservableRecorder)
+        {
+            ObservableRecorder observableRecorder = (ObservableRecorder)observable;
+            if(data instanceof short[])
+            {
+                int delayInSamples = findLatency((short[])data,
+                        observableMediaPlayer.getSampleRate(),
+                        ObservableMediaPlayer.LATENCY_TEST_FREQUENCY,
+                        observableMediaPlayer.getFrequencyDuration(),
+                        observableMediaPlayer.getChannelCount());
+                observableRecorder.setLatency(delayInSamples);
+                Log.d(LOG_TAG, "DELAY (ms): " + (((double)delayInSamples / (double)observableMediaPlayer.getChannelCount()) /
+                        (double)observableMediaPlayer.getSampleRate()) * 1000);
+
+                observableRecorder.deleteObserver(this);
+                observableRecorder.addObserver(observableMediaPlayer);
+                observableMediaPlayer.cleanupLatencyTest();
+            }
+        }
     }
 }

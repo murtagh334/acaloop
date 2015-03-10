@@ -8,5 +8,6 @@
     <string name="stop_playing">Stop</string>
     <string name="stop_recording">Stop</string>
     <string name="action_settings">Settings</string>
+    <string name="latency_test">Test Latency</string>
 
 </resources>

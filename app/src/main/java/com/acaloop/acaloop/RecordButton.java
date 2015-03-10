@@ -13,6 +13,9 @@ import java.util.Observer;
  */
 public class RecordButton extends Button implements Observer
 {
+
+//    final static String LOG_TAG = RecordButton.class.getSimpleName();
+
     public RecordButton(Context context, AttributeSet attrs)
     {
         super(context,attrs);
@@ -25,14 +28,21 @@ public class RecordButton extends Button implements Observer
             @Override
             public void onClick(View v)
             {
-                if(!observableRecorder.isRecording())
+                new Thread( new Runnable()
                 {
-                    observableRecorder.startRecording();
-                }
-                else
-                {
-                    observableRecorder.stopRecording();
-                }
+                    @Override
+                    public void run()
+                    {
+                        if(!observableRecorder.isRecording())
+                        {
+                            observableRecorder.startRecording();
+                        }
+                        else
+                        {
+                            observableRecorder.stopRecording();
+                        }
+                    }
+                }).start();
             }
         });
     }

@@ -1,24 +1,26 @@
 package com.acaloop.acaloop;
 
+import android.annotation.TargetApi;
+import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
 import android.util.Log;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
+import java.util.Arrays;
 import java.util.InvalidPropertiesFormatException;
 import java.util.Observable;
-import java.util.Observer;
 
 /**
  * Recorder that observes ObservableMediaPlayer so it can stop when playback stops.
  */
-public class ObservableRecorder extends Observable implements Observer
+public class ObservableRecorder extends Observable //implements Observer
 {
-    AudioRecord recorder;
-    int bufferSize;
+    private AudioRecord recorder;
+    private int bufferSize;
+//    private NoiseSuppressor noiseSuppressor;
 
-    private static String LOG_TAG = ObservableRecorder.class.getCanonicalName();
+    private static String LOG_TAG = ObservableRecorder.class.getSimpleName();
+    private int latency;
 
     public ObservableRecorder() throws InvalidPropertiesFormatException
     {
@@ -37,22 +39,45 @@ public class ObservableRecorder extends Observable implements Observer
     /**
      * Initialize our recorder.
      */
+    //Hushes compiler about NoiseSuppressor. we've handled it.
+    @TargetApi(16)
     private void initRecorder() throws InvalidPropertiesFormatException
     {
+        latency = 0;
+
         //TODO: make sure no app is using mic already?
         //TODO: choose better sample rate, channel config, audio format if available.
         int sampleRateInHz = RecordActivity.SAMPLE_RATE_HZ;
-        int channelConfig = RecordActivity.CHANNEL_CONFIG;
+        int channelConfig = AudioFormat.CHANNEL_IN_STEREO;
         int audioFormat = RecordActivity.AUDIO_FORMAT;
         int minBufferSize = AudioRecord.getMinBufferSize(sampleRateInHz, channelConfig, audioFormat);
         bufferSize = minBufferSize;
 
-        recorder = new AudioRecord(MediaRecorder.AudioSource.MIC,
+        //Use CAMCORDER so that when headphones are plugged in, it still uses the mic from the phone
+        //TODO: If headphones HAVE a mic, should be able to use that instead
+        recorder = new AudioRecord(MediaRecorder.AudioSource.CAMCORDER,
                 sampleRateInHz,channelConfig,audioFormat,minBufferSize);
+
         if(recorder.getState() != AudioRecord.STATE_INITIALIZED)
         {
             throw new InvalidPropertiesFormatException("Couldn't initialize AudioRecord. Recorder in state: " + recorder.getState());
         }
+
+        //TODO: Test more with noise suppressor before adding this.
+//        if(Build.VERSION.SDK_INT >= 16 && NoiseSuppressor.isAvailable())
+//        {
+//            noiseSuppressor = NoiseSuppressor.create(recorder.getAudioSessionId());
+//
+//            if (noiseSuppressor.setEnabled(true) != NoiseSuppressor.SUCCESS)
+//            {
+//                Log.e(LOG_TAG, "Could not enable noise suppressor");
+//            }
+//        }
+//        else
+//        {
+//            Log.d(LOG_TAG, ""+NoiseSuppressor.isAvailable());
+//            Log.d(LOG_TAG, "Noise suppression not available");
+//        }
     }
 
     /**
@@ -60,51 +85,75 @@ public class ObservableRecorder extends Observable implements Observer
      */
     public void startRecording()
     {
-        recorder.startRecording();
-        setChanged();
-        notifyObservers();
+        startRecording(false, null);
+    }
 
-        //Start recording on a new thread. Don't block this one.
+    /**
+     * Start a recording. Notify observers that we've started.
+     */
+    public void startRecording(final boolean isLatencyTestRecording, ObservableMediaPlayer mediaPlayer)
+    {
+        recorder.startRecording();
+
+        //Start recording on a new thread. Absolutely don't block this one.
         new Thread(new Runnable()
         {
             @Override
             public void run()
             {
-                writeAudioDataToStream();
+                writeAudioDataToStream(isLatencyTestRecording);
             }
         }).start();
+
+        //Start recording first then playback should start.
+        //Can always re-align, but can't re-align audio that was never captured.
+        setChanged();
+        notifyObservers();
+
+        //Don't bother saving latency test audio data to the player.
+        if(isLatencyTestRecording)
+            deleteObserver(mediaPlayer);
     }
 
-    private void writeAudioDataToStream()
+    private void writeAudioDataToStream(boolean isLatencyTestRecording)
     {
-        ByteArrayOutputStream os = new ByteArrayOutputStream();
+        //Can only record up to this length.
+        int maxRecordingLength = 5;
+        short []audioData= new short[recorder.getChannelCount()*recorder.getSampleRate()*maxRecordingLength];
+        int offset = 0;
         while(isRecording())
         {
-            byte []audioData = new byte[bufferSize];
-            recorder.read(audioData,0,bufferSize);
-            try
+            int shortsRead = recorder.read(audioData,offset,Math.min(bufferSize,audioData.length - offset));
+            if(shortsRead <=0 )
             {
-                os.write(audioData);
-            } catch (IOException e)
-            {
-                e.printStackTrace();
-                Log.e(LOG_TAG, "Couldn't write to byte output stream");
+                stopRecording();
+                break;
             }
+            offset+=shortsRead;
         }
         //Not using recorder for foreseeable future, free resources.
         //cleanupRecorder();
 
-        Log.d(LOG_TAG, "Sending os byte array");
+        Log.d(LOG_TAG, "latency: " + latency + " " + isLatencyTestRecording);
+
+        //Save our recorded data
+        int numZeroes = 0;
+        for(; numZeroes < audioData.length; numZeroes++)
+        {
+            if(audioData[numZeroes]!=0)
+            {
+                break;
+            }
+        }
+
+        Log.d(LOG_TAG, "Number of zeroes at beginning: " + numZeroes);
+        //If we get zeroes at beginning, assume this is some other form of latency that we can account for.
+        //remove them before calculating & applying latency correction
+        short[] recordedData = Arrays.copyOfRange(audioData, isLatencyTestRecording ? numZeroes : numZeroes + latency,offset);
+
         //We have officially stopped recording now. send the audio data to whoever needs it.
         setChanged();
-        notifyObservers(os.toByteArray());
-        try
-        {
-            os.close();
-        } catch (IOException e)
-        {
-            e.printStackTrace();
-        }
+        notifyObservers(recordedData);
     }
 
     /**
@@ -118,35 +167,53 @@ public class ObservableRecorder extends Observable implements Observer
         }
     }
 
+//    /**
+//     * Release recorder appropriately.
+//     * This means checking that it's stopped recording first,
+//     * and stopping it if it hasn't.
+//     */
+//    public void cleanupRecorder()
+//    {
+//        if(recorder != null)
+//        {
+//            stopRecording();
+//
+//            recorder.release();
+//            recorder = null;
+//        }
+//
+////        if(noiseSuppressor != null)
+////        {
+////            noiseSuppressor.release();
+////            noiseSuppressor = null;
+////        }
+//    }
+
+    //TODO: Bring this back (recorder stops when playback stops once we can time the recorder's stopping correctly)
+    //i.e. send the notification that the playback has stopped some time after finishing writing the data to be queued
+//    /**
+//     * @param observable The MediaPlayer we are watching. If it stops playing while we're recording,
+//     *                   then we should stop recording as well.
+//     * @param data Not used
+//     */
+//    @Override
+//    public void update(Observable observable, Object data)
+//    {
+//        ObservableMediaPlayer observableMediaPlayer = (ObservableMediaPlayer)observable;
+//        //If we were recording, but playback finished, we should stop
+//        if(!observableMediaPlayer.isPlaying() && isRecording())
+//        {
+//            stopRecording();
+//        }
+//    }
+
     /**
-     * Release recorder appropriately.
-     * This means checking that it's stopped recording first,
-     * and stopping it if it hasn't.
+     *Sets the latency correction value (in samples)
+     * @param samples Latency in samples
      */
-    public void cleanupRecorder()
+    public void setLatency(int samples)
     {
-        if(recorder == null)
-            return;
-
-        stopRecording();
-
-        recorder.release();
-        recorder = null;
+        latency = samples;
     }
 
-    /**
-     * @param observable The MediaPlayer we are watching. If it stops playing while we're recording,
-     *                   then we should stop recording as well.
-     * @param data Not used
-     */
-    @Override
-    public void update(Observable observable, Object data)
-    {
-        ObservableMediaPlayer observableMediaPlayer = (ObservableMediaPlayer)observable;
-        //If we were recording, but playback finished, we should stop
-        if(!observableMediaPlayer.isPlaying() && isRecording())
-        {
-            stopRecording();
-        }
-    }
 }

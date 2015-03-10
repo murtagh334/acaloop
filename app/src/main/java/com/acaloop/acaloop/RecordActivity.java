@@ -8,10 +8,12 @@ import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
+import android.widget.Button;
 
 import java.util.InvalidPropertiesFormatException;
 import java.util.Observable;
 import java.util.Observer;
+import java.util.Vector;
 
 /**
  * The main activity
@@ -28,6 +30,13 @@ public class RecordActivity extends ActionBarActivity implements Observer
 
     ObservableMediaPlayer observableMediaPlayer;
     ObservableRecorder observableRecorder;
+
+    PlayButton playButton;
+    RecordButton recordButton;
+    Button resetButton;
+    Button latencyTestButton;
+
+    Vector<Button> buttons;
 
     final static String LOG_TAG = RecordActivity.class.getSimpleName();
 
@@ -53,8 +62,17 @@ public class RecordActivity extends ActionBarActivity implements Observer
             e.printStackTrace();
         }
 
-        PlayButton playButton = (PlayButton)findViewById(R.id.play_button);
-        RecordButton recordButton = (RecordButton)findViewById(R.id.record_button);
+        playButton = (PlayButton)findViewById(R.id.play_button);
+        recordButton = (RecordButton)findViewById(R.id.record_button);
+        resetButton = (Button)findViewById(R.id.reset_button);
+        latencyTestButton = (Button)findViewById(R.id.latency_test_button);
+
+        buttons = new Vector<>();
+
+        buttons.add(playButton);
+        buttons.add(recordButton);
+        buttons.add(resetButton);
+        buttons.add(latencyTestButton);
 
         playButton.attachMediaPlayer(observableMediaPlayer);
         recordButton.attachRecorder(observableRecorder);
@@ -120,11 +138,18 @@ public class RecordActivity extends ActionBarActivity implements Observer
     @SuppressWarnings("ResultOfMethodCallIgnored")
     public void onClickReset(View v)
     {
-//        cleanup();
-        observableMediaPlayer.stopPlayback();
-        observableRecorder.stopRecording();
-        //The function of the reset button is to delete the audio we've accumulated.
-        observableMediaPlayer.deletePlaybackData();
+        new Thread( new Runnable()
+        {
+            @Override
+            public void run()
+            {
+                //        cleanup();
+                observableMediaPlayer.stopPlayback();
+                observableRecorder.stopRecording();
+                //The function of the reset button is to delete the audio we've accumulated.
+                observableMediaPlayer.deletePlaybackData();
+            }
+        }).start();
     }
 
     /**
@@ -133,10 +158,35 @@ public class RecordActivity extends ActionBarActivity implements Observer
      */
     public void onClickLatencyTest(View v)
     {
-        observableMediaPlayer.setupLatencyTest();
-        observableRecorder.addObserver(this);
-        //Starts recording, plays the sine wave.
-        observableRecorder.startRecording(true, observableMediaPlayer);
+        final RecordActivity toObserve = this;
+        new Thread(new Runnable()
+        {
+            @Override
+            public void run()
+            {
+                setButtonsEnabled(false);
+                //don't block UI thread.
+                observableMediaPlayer.setupLatencyTest();
+                observableRecorder.addObserver(toObserve);
+                //Starts recording, plays the sine wave.
+                observableRecorder.startRecording(true, observableMediaPlayer);
+            }
+        }).start();
+    }
+
+    public void setButtonsEnabled(final boolean clickable)
+    {
+        for(final Button b : buttons)
+        {
+            b.post(new Runnable()
+            {
+                @Override
+                public void run()
+                {
+                    b.setEnabled(clickable);
+                }
+            });
+        }
     }
 
     /**
@@ -214,6 +264,8 @@ public class RecordActivity extends ActionBarActivity implements Observer
                 observableRecorder.deleteObserver(this);
                 observableRecorder.addObserver(observableMediaPlayer);
                 observableMediaPlayer.cleanupLatencyTest();
+                //Re-enable buttons again
+                setButtonsEnabled(true);
             }
         }
     }

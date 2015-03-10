@@ -117,9 +117,9 @@ public class ObservableRecorder extends Observable //implements Observer
 
     private void writeAudioDataToStream(boolean isLatencyTestRecording)
     {
-        //Can only record up to this length.
-        int maxRecordingLength = 5;
-        short []audioData= new short[recorder.getChannelCount()*recorder.getSampleRate()*maxRecordingLength];
+        //Can only record up to this length in seconds.
+        double maxRecordingLength = isLatencyTestRecording ? 0.5 : 5;
+        short []audioData= new short[(int)(recorder.getChannelCount()*recorder.getSampleRate()*maxRecordingLength)];
         int offset = 0;
         while(isRecording())
         {
@@ -213,6 +213,7 @@ public class ObservableRecorder extends Observable //implements Observer
      */
     public void setLatency(int samples)
     {
+        Log.d(LOG_TAG, "Latency set from: " + latency + " to: " + samples);
         latency = samples;
     }
 

@@ -55,7 +55,7 @@ public class RecordActivity extends ActionBarActivity implements Observer
         try
         {
             observableMediaPlayer = new ObservableMediaPlayer(this);
-            observableRecorder = new ObservableRecorder();
+            observableRecorder = new ObservableRecorder(observableMediaPlayer);
         }
         catch (InvalidPropertiesFormatException e)
         {
@@ -79,7 +79,6 @@ public class RecordActivity extends ActionBarActivity implements Observer
 
         observableMediaPlayer.addObserver(playButton);
 
-        observableRecorder.addObserver(observableMediaPlayer);
         observableRecorder.addObserver(recordButton);
 
     }
@@ -169,12 +168,16 @@ public class RecordActivity extends ActionBarActivity implements Observer
                 observableMediaPlayer.setupLatencyTest();
                 observableRecorder.addObserver(toObserve);
                 //Starts recording, plays the sine wave.
-                observableRecorder.startRecording(true, observableMediaPlayer);
+                observableRecorder.startRecording(true);
             }
         }).start();
     }
 
-    public void setButtonsEnabled(final boolean clickable)
+    /**
+     * Set all buttons to be enabled or disabled
+     * @param enabled True if all buttons are to be enabled
+     */
+    public void setButtonsEnabled(final boolean enabled)
     {
         for(final Button b : buttons)
         {
@@ -183,7 +186,7 @@ public class RecordActivity extends ActionBarActivity implements Observer
                 @Override
                 public void run()
                 {
-                    b.setEnabled(clickable);
+                    b.setEnabled(enabled);
                 }
             });
         }
@@ -191,41 +194,81 @@ public class RecordActivity extends ActionBarActivity implements Observer
 
     /**
      *
-     * @param data The data we're given
-     * @return The latency
+     * @param data PCM Audio data
+     * @param sampleRate The sample rate of given data
+     * @param frequency The frequency of the tone played for the latency test
+     * @param frequencyDurationInFrames The duration of the tone played for the latency test
+     * @param channelCount The number of channels the audio data represents
+     * @return The amount of samples before the tone with given frequency appears in the given data. (Approximate)
      */
-    public int findLatency(short[] data, int sampleRate, int frequency, int frequencyDuration, int channelCount)
+    public int findLatency(short[] data, int sampleRate, int frequency, int frequencyDurationInFrames, int channelCount)
     {
-        int mostLikelyOffset = 0;
-        double powerOfOffset = -999; //arbitrary low value
+        int mostLikelyOffsetInFrames = -1;
+        double powerOfOffset = 0; //arbitrary low value
 
-        double msInSamples = (1.0*channelCount/1000.0)*(double)sampleRate;
+        double framesInOneMs = sampleRate/1000.0;
 
-        //Assume we're fine with 20 ms delay and won't ever go above 220 ms delay.
-        for(int checkOffset = 20*(int)msInSamples; checkOffset < Math.min(220*(int)msInSamples,data.length); checkOffset+=channelCount)
+        int lowerBoundMsec = 100;
+        int upperBoundMsec = 250;
+        Log.d(LOG_TAG, "Duration (frames): " + frequencyDurationInFrames);
+        Log.d(LOG_TAG, "Frequency: " + frequency);
+        Log.d(LOG_TAG, "channel count: " + channelCount);
+
+        //If it hasn't found a better match for latency in 10 periods, we stop there.
+        //Prevents it from finding wrong values later and helps to terminate the algorithm faster.
+        //Need to have a sufficiently high error allowance so that we allow blips in the sound data,
+        //but need to have a low enough error allowance that the algorithm doesn't detect something later on as the tone.
+        final int ERROR_ALLOWANCE = 10;
+        for(int checkOffsetInFrames = (int)(lowerBoundMsec*framesInOneMs); checkOffsetInFrames < (int)(upperBoundMsec*framesInOneMs); checkOffsetInFrames++)
         {
-            double power = calculateGoertzel(data, checkOffset, checkOffset + frequencyDuration*channelCount,
+
+            if(mostLikelyOffsetInFrames != -1 && (checkOffsetInFrames - mostLikelyOffsetInFrames) > observableMediaPlayer.getFramesPerPeriod()*ERROR_ALLOWANCE)
+            {
+                break;
+            }
+//            Log.d(LOG_TAG, "Check offset (frames): " + checkOffsetInFrames);
+            double power = calculateGoertzel(data, checkOffsetInFrames*channelCount, (checkOffsetInFrames + frequencyDurationInFrames)*channelCount,
                     frequency, sampleRate, channelCount);
 
             if(power > powerOfOffset)
             {
                 powerOfOffset = power;
-                mostLikelyOffset = checkOffset;
+                mostLikelyOffsetInFrames = checkOffsetInFrames;
+                Log.d(LOG_TAG, "new most likely: " + mostLikelyOffsetInFrames);
             }
         }
-        return mostLikelyOffset;
+
+//        logDataFromOffset(data, mostLikelyOffsetInFrames, frequencyDurationInFrames, channelCount);
+        return mostLikelyOffsetInFrames*channelCount;
     }
 
-    public double calculateGoertzel(short[] sample, int from, int to, double frequency, int sampleRate, int channelCount)
+//    public void logDataFromOffset(short[] data, int mostLikelyOffsetInFrames, int frequencyDurationInFrames, int channelCount)
+//    {
+//        for(int i = mostLikelyOffsetInFrames; i < mostLikelyOffsetInFrames + frequencyDurationInFrames; i++ )
+//        {
+//            Log.d(LOG_TAG, ""+data[i*channelCount]);
+//        }
+//    }
+
+    /**
+     * Calculate the goertzel value
+     * @param sample The data in question
+     * @param beginInFrames The start of the section of data we should look at
+     * @param endInFrames The end of the section of data we should look at
+     * @param frequency The frequency we want the goertzel value for
+     * @param sampleRate The sample rate of the data
+     * @param channelCount The number of channels the audio data represents
+     * @return The power of the given frequency in the sample
+     */
+    public double calculateGoertzel(short[] sample, int beginInFrames, int endInFrames, double frequency, int sampleRate, int channelCount)
     {
         double skn, skn1, skn2;
         skn = skn1 = 0;
-
-        for (int i = from; i < to; i+=channelCount)
+        for (int i = beginInFrames; i < endInFrames; i++)
         {
             skn2 = skn1;
             skn1 = skn;
-            skn = 2 * Math.cos(2 * Math.PI * frequency / sampleRate) * skn1 - skn2 + sample[i];
+            skn = 2 * Math.cos(2 * Math.PI * frequency / sampleRate) * skn1 - skn2 + sample[i*channelCount];
         }
 
         double wnk = Math.exp(-2 * Math.PI * frequency / sampleRate);
@@ -254,15 +297,14 @@ public class RecordActivity extends ActionBarActivity implements Observer
             {
                 int delayInSamples = findLatency((short[])data,
                         observableMediaPlayer.getSampleRate(),
-                        ObservableMediaPlayer.LATENCY_TEST_FREQUENCY,
-                        observableMediaPlayer.getFrequencyDuration(),
+                        observableMediaPlayer.getLatencyToneFrequency(),
+                        observableMediaPlayer.getLatencyToneDurationInFrames(),
                         observableMediaPlayer.getChannelCount());
                 observableRecorder.setLatency(delayInSamples);
                 Log.d(LOG_TAG, "DELAY (ms): " + (((double)delayInSamples / (double)observableMediaPlayer.getChannelCount()) /
                         (double)observableMediaPlayer.getSampleRate()) * 1000);
 
                 observableRecorder.deleteObserver(this);
-                observableRecorder.addObserver(observableMediaPlayer);
                 observableMediaPlayer.cleanupLatencyTest();
                 //Re-enable buttons again
                 setButtonsEnabled(true);

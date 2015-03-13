@@ -22,9 +22,13 @@ public class ObservableRecorder extends Observable //implements Observer
     private static String LOG_TAG = ObservableRecorder.class.getSimpleName();
     private int latency;
 
-    public ObservableRecorder() throws InvalidPropertiesFormatException
+    private ObservableMediaPlayer player;
+
+    public ObservableRecorder(ObservableMediaPlayer player) throws InvalidPropertiesFormatException
     {
         super();
+
+        this.player = player;
         initRecorder();
     }
 
@@ -85,13 +89,13 @@ public class ObservableRecorder extends Observable //implements Observer
      */
     public void startRecording()
     {
-        startRecording(false, null);
+        startRecording(false);
     }
 
     /**
      * Start a recording. Notify observers that we've started.
      */
-    public void startRecording(final boolean isLatencyTestRecording, ObservableMediaPlayer mediaPlayer)
+    public void startRecording(final boolean isLatencyTestRecording)
     {
         recorder.startRecording();
 
@@ -105,24 +109,29 @@ public class ObservableRecorder extends Observable //implements Observer
             }
         }).start();
 
+        //Start player's playback
+        player.startPlayback();
+
         //Start recording first then playback should start.
         //Can always re-align, but can't re-align audio that was never captured.
         setChanged();
         notifyObservers();
-
-        //Don't bother saving latency test audio data to the player.
-        if(isLatencyTestRecording)
-            deleteObserver(mediaPlayer);
     }
 
     private void writeAudioDataToStream(boolean isLatencyTestRecording)
     {
         //Can only record up to this length in seconds.
-        double maxRecordingLength = isLatencyTestRecording ? 0.5 : 5;
+        double maxRecordingLength = isLatencyTestRecording ? 3 : 5;
         short []audioData= new short[(int)(recorder.getChannelCount()*recorder.getSampleRate()*maxRecordingLength)];
         int offset = 0;
+
+        Log.d(LOG_TAG, "Start recording" + System.currentTimeMillis());
         while(isRecording())
         {
+//            if(offset == 0)
+//            {
+//                player.notifyCanPlay();
+//            }
             int shortsRead = recorder.read(audioData,offset,Math.min(bufferSize,audioData.length - offset));
             if(shortsRead <=0 )
             {
@@ -150,10 +159,18 @@ public class ObservableRecorder extends Observable //implements Observer
         //If we get zeroes at beginning, assume this is some other form of latency that we can account for.
         //remove them before calculating & applying latency correction
         short[] recordedData = Arrays.copyOfRange(audioData, isLatencyTestRecording ? numZeroes : numZeroes + latency,offset);
-
-        //We have officially stopped recording now. send the audio data to whoever needs it.
+        //Explicitly notify the player so they get first priority with our data.
         setChanged();
-        notifyObservers(recordedData);
+        if(!isLatencyTestRecording)
+        {
+            player.update(this, recordedData);
+            notifyObservers();
+        }
+        else
+        {
+            //We have officially stopped recording now. send the audio data to whoever needs it.
+            notifyObservers(recordedData);
+        }
     }
 
     /**

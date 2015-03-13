@@ -23,11 +23,12 @@ public class ObservableMediaPlayer extends Observable implements Observer
     private AudioManager audioManager;
     private AudioManager.OnAudioFocusChangeListener afChangeListener;
 
-    private short[] playbackData;
+    private short[] playbackData = null;
+//    private boolean canPlay = false;
 
 //    private PresetReverb presetReverb;
 
-    public final static int LATENCY_TEST_FREQUENCY = 880;
+    public final static int FRAMES_PER_PERIOD = 50;
 
     /**
      * @param recordActivity The RecordActivity that holds this ObservableMediaPlayer
@@ -98,6 +99,7 @@ public class ObservableMediaPlayer extends Observable implements Observer
         }
 
         //TODO: Don't allow sleeping while we're playing. (wake lock)
+//        short[] metronomeTone = generateSineWave();
     }
 
     /**
@@ -106,7 +108,9 @@ public class ObservableMediaPlayer extends Observable implements Observer
     public void setupLatencyTest()
     {
         stopPlayback();
-        generateSineWave(LATENCY_TEST_FREQUENCY);
+        int latencyFrequency = getLatencyToneFrequency();
+        //Divide by 8 because this gives the phase of the sine wave that the goertzel algorithm recognizes the best given a certain tone duration.
+        playbackData = generateSineWave(latencyFrequency, getLatencyToneDurationInFrames(), getFramesPerPeriod(latencyFrequency)/8);
         //TODO: This could be an option later on for the headphone-less in general.
 //        audioManager.setMode(AudioManager.MODE_IN_CALL);
 //        audioManager.setSpeakerphoneOn(true);
@@ -123,30 +127,27 @@ public class ObservableMediaPlayer extends Observable implements Observer
         deletePlaybackData();
     }
 
-    private void generateSineWave(int frequency)
+    /**
+     * Return PCM data of a simple sine wave with given frequency and duration
+     * @param frequency The frequency / pitch of the sine wave
+     * @param durationInFrames The duration of the sine wave
+     * @return The audio data representing the sine wave
+     */
+    private short[] generateSineWave(int frequency, int durationInFrames, int phase)
     {
-        playbackData = new short[getFrequencyDuration()*track.getChannelCount()];
+        int durationInSamples = durationInFrames*track.getChannelCount();
+        short[] buffer = new short[durationInSamples];
         double increment = ((2*Math.PI)*frequency)/(double)track.getSampleRate();
-        double theta = 0;
 
-        for(int i  = 0; i < playbackData.length; i+=track.getChannelCount())
+        for(int i  = 0; i < buffer.length; i+=track.getChannelCount())
         {
             for(int j = 0; j < track.getChannelCount(); j++)
             {
                 //Use byte max value *8 as the size of the amplitude because clipping occurs when using the full possible short.
-                playbackData[i+j] = (byte) (Math.sin(theta) * Byte.MAX_VALUE);
+                buffer[i+j] = (short) (Math.sin(increment*(i - phase)) * Short.MAX_VALUE);
             }
-            theta+=increment;
         }
-    }
-
-    /**
-     * @return The duration in samples of the tone played for latency correction
-     */
-    public int getFrequencyDuration()
-    {
-        //i.e. 0.1 seconds
-        return track.getSampleRate()/10;
+        return buffer;
     }
 
     /**
@@ -154,12 +155,14 @@ public class ObservableMediaPlayer extends Observable implements Observer
      */
     public void startPlayback()
     {
+        Log.d(LOG_TAG, "Start Playback");
         //If already playing, don't need to play
         //If we don't have any data to play, don't attempt to play.
         if(isPlaying() || playbackData == null)
             return;
 
         track.play();
+
         new Thread( new Runnable()
         {
             @Override
@@ -168,13 +171,41 @@ public class ObservableMediaPlayer extends Observable implements Observer
                 writeAudioFromPlaybackData();
             }
         }).start();
+        //Allow playback to start as soon as possible.
+        Thread.yield();
 
         setChanged();
         notifyObservers();
     }
 
+    /**
+     * Make sure the recording thread has started before we start recording.
+     * Must be synchronized because we must be holding this object's lock before waiting.
+     * Should only do this if we
+     */
+//    private synchronized void waitForRecordingToStart()
+//    {
+//        while(!canPlay)
+//        {
+//            Log.d(LOG_TAG, "Waiting...");
+//            try
+//            {
+//                //waiting releases the lock and we go to sleep
+//                wait();
+//            }
+//            catch(InterruptedException e)
+//            {
+//                //do nothing
+//            }
+//        }
+//        //Reset canPlay.
+//        canPlay = false;
+//    }
+
     private void writeAudioFromPlaybackData()
     {
+        Log.d(LOG_TAG, "Starting Playback: " + System.currentTimeMillis());
+//        waitForRecordingToStart();
         track.write(playbackData, 0, playbackData.length);
         //If we completed playback without "stopping" it, set to stopped.
         stopPlayback();
@@ -231,11 +262,11 @@ public class ObservableMediaPlayer extends Observable implements Observer
     public void update(Observable observable, Object data)
     {
         ObservableRecorder observableRecorder = (ObservableRecorder)observable;
-        if(observableRecorder.isRecording() && !isPlaying())
-        {
-            startPlayback();
-        }
-        else if(!observableRecorder.isRecording())
+//        if(observableRecorder.isRecording() && !isPlaying())
+//        {
+//            startPlayback();
+//        }
+/*        else*/ if(!observableRecorder.isRecording())
         {
             if(isPlaying())
                 stopPlayback();
@@ -268,6 +299,14 @@ public class ObservableMediaPlayer extends Observable implements Observer
         }
     }
 
+    public int getFramesPerPeriod()
+    {
+        return FRAMES_PER_PERIOD;
+    }
+    public int getFramesPerPeriod(int frequency)
+    {
+        return getSampleRate()/frequency;
+    }
     /**
      * @return The AudioTrack's sample rate
      */
@@ -283,4 +322,30 @@ public class ObservableMediaPlayer extends Observable implements Observer
     {
         return track.getChannelCount();
     }
+
+    /**
+     * @return The duration in frames of the tone played for latency correction
+     */
+    public int getLatencyToneDurationInFrames()
+    {
+        //0.5 seconds. Since my frequency is 441, (50 frames per period, 882 periods per second)
+        //Will be 44100 samples = 22050 frames. Clearly the period evenly goes into 22050 frames, so the duration is perfect.
+        return track.getSampleRate()/2;
+    }
+
+    /**
+     * @return The frequency of the latency tone (Periods per second)
+     */
+    public int getLatencyToneFrequency()
+    {
+        //Frequency of interest should be an integer factor of sample rate
+        //http://www.embedded.com/design/configurable-systems/4024443/The-Goertzel-Algorithm
+        return track.getSampleRate()/FRAMES_PER_PERIOD;
+    }
+
+//    public synchronized void notifyCanPlay()
+//    {
+//        canPlay = true;
+//        notifyAll();
+//    }
 }
